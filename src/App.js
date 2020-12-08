@@ -1,57 +1,90 @@
 import React from 'react';
 import { Button, TextField, Dialog, DialogTitle, DialogContent } from '@material-ui/core';
+import Web3 from 'web3';
+import StakingContractJson from './StakingContract.json';
+import DevelopmentContractJson from './DevelopmentContract.json';
 
 const iframeStyle = {
   width: "100%",
   height: "640px",
 };
 
-// const walletOrigin = "https://yopta.net";
-const walletOrigin = "http://localhost:8080/main-index.html";
+const walletOrigin = "https://wallet.testnet.velas.com/frame.html";
+// const walletOrigin = "http://localhost:8080/main-index.html";
+const web3 = new Web3("https://explorer.velas.com/rpc");
+
 // const walletOrigin = "https://walet.velas.com"; prod - not working yet
-function Form() {
-  const [to, setTo] = React.useState("");
-  const [data, setData] = React.useState("");
-  const [amount, setAmount] = React.useState("0");
-  const [opened, setOpened] = React.useState(false);
-  const openWallet = () => setOpened(true);
-  const closeWallet = () => setOpened(false);
-  const iframeSrc = `${walletOrigin}#to=${to}&transaction=${data}&amount=${amount}`;
-  const onMessage = (event) => {
-    if (event.origin !== walletOrigin) {
-      return;
-    }
-    try {
-      const json = JSON.parse(event.data);
-      if (json.err) {
-        throw new Error(json.err);
-      }
-      alert(json.txHash);
-    } catch(e) {
-      alert(e.message);
-    }
-    closeWallet();
-  };
-  React.useEffect(() => {
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+async function have10000VlxStakes(ethAddress) {
+  const stakingContract = new web3.eth.Contract(StakingContractJson, "0x1100000000000000000000000000000000000001", {
+    from: ethAddress
   });
-  return (
-    <form noValidate autoComplete="off">
-      <TextField id="standard-basic" label="To(vlx or eth format)" onChange={(event) => setTo(event.target.value)} value={to} />
-      <TextField id="filled-basic" label="Data(hex)" onChange={(event) => setData(event.target.value)} value={data} />
-      <TextField id="outlined-basic" label="Amount" onChange={(event) => setAmount(event.target.value)} value={amount}/>
-      <Button variant="contained" onClick={openWallet}>Open</Button>
-      <Dialog open={opened} onClose={closeWallet}>
-          <DialogTitle id="customized-dialog-title" onClose={closeWallet}>
-            Sign your transaction
-          </DialogTitle>
-          <DialogContent dividers>
-              <iframe style={iframeStyle} src={iframeSrc}></iframe>
-          </DialogContent>
-      </Dialog>
-    </form>
+  const pools = await stakingContract.methods.getStakerPools(ethAddress, 0, 0).call();
+  const stakesString = await Promise.all(
+      pools.map((pool) =>
+        stakingContract.methods.stakeAmount(pool, ethAddress).call()
+      )
   );
+  const stakes = stakesString.map(parseFloat);
+  const totalStake = stakes.reduce((acc, curr) => curr+acc, 0) / 1e18;
+  return totalStake >= 10000;
+}
+
+async function tryVote(index/* Valid index from 1 to 5 */, ethAddress) {
+  if (!have10000VlxStakes(message.ethAddress)) {
+    alert("Sorry, you must stake at least 10000 vlx to be able to vote");
+    return;
+  }
+  const devContract = new web3.eth.Contract(DevelopmentContractJson, "0xd89fCa43728eAa5c306c3148DA32dE8A3Ef2963f", {
+    from: message.ethAddress
+  });
+  const index = 1;
+  const transaction = devContract.methods.vote(index).encodeABI();
+
+  iframe.contentWindow.postMessage(JSON.stringify({type: "send", transaction, to: "0xd89fCa43728eAa5c306c3148DA32dE8A3Ef2963f", amount: "1"}), "*");
+}
+
+async function getProposal(index, ethAddress) {
+  const devContract = new web3.eth.Contract(DevelopmentContractJson, "0xd89fCa43728eAa5c306c3148DA32dE8A3Ef2963f", {
+    from: ethAddress
+  });
+  const proposal = await devContract.methods.getProposalByIndex(index, ethAddress).call();
+  /*
+  [0] - proposal name
+  [1] - proposal description
+  [2] - vote count
+  [3] - vote weight - ignore for now
+  [4] - progress - ignore for now
+  [5] - is voted?
+  */
+  return proposal;
+}
+
+function sendQueryAddressUntilReceiveAnswer() {
+  if (interval4Address)
+      clearInterval(interval4Address);
+  if (address) return;
+  interval4Address = setInterval(() => {
+    if (iframe === null) return;
+    iframe.contentWindow.postMessage(JSON.stringify({type: "queryAddress"}), "*");
+  }, 500);
+}
+
+function processAddressMessage(message) {
+  clearInterval(interval4Address);
+  if (message.address) {
+    // alert(message.address);
+    setAddress(message.address);
+  }
+  if (message.err) {
+    alert(message.err);
+    setError(new Error(message.err));
+    return;
+  }
+  tryVote(1/*1-5*/);
+}
+
+function processTxMessage(message) {
+  alert(message.txHash) || setAddress(message.address);
 }
 
 function App() {
@@ -66,16 +99,10 @@ function App() {
       const message = JSON.parse(event.data);
       switch(message.type) {
         case "address":
-          clearInterval(interval4Address);
-          if (message.address) {
-            alert(message.address) || setAddress(message.address);
-            iframe.contentWindow.postMessage(JSON.stringify({type: "send", transaction: "0x3ea15d620000000000000000000000000000000000000000000000000000000000000040000000000000000000000000eb057d96e2532257e47dbd8d3090c8be5030db7700000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000381", to: "0x1100000000000000000000000000000000000001"}), "*");
-          }
-          if (message.err)
-            alert(message.err) || setError(new Error(message.err));
+          processAddressMessage(message)
         break;
         case "tx":
-          alert(message.txHash) || setAddress(message.address);
+          processTxMessage(message)
         break;
       }
     } catch (e) {
@@ -92,26 +119,11 @@ function App() {
   const setIframeRef = (gotIframe) => {
     iframe = gotIframe;
     if (iframe === null) return;
-    if (interval4Address)
-        clearInterval(interval4Address);
-    if (address) return;
-    interval4Address = setInterval(() => {
-      if (iframe === null) return;
-      iframe.contentWindow.postMessage(JSON.stringify({type: "queryAddress"}), "*");
-    }, 500);
+    sendQueryAddressUntilReceiveAnswer();
   };
-  switch (status) {
-    case "loading":
-
-      break;
-    default:
-
-  }
-
   return (
     <>
       <iframe ref={setIframeRef} style={iframeStyle} src={iframeSrc} title="Wallet"></iframe>
-
     </>
   );
 }
